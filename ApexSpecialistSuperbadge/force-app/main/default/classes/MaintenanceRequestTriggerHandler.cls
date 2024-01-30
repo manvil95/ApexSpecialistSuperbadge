@@ -1,5 +1,5 @@
 public with sharing class MaintenanceRequestTriggerHandler extends TriggerHandler{
-   
+
     private List<Case> 		oldMaintenanceRequests;
 	private List<Case> 		newMaintenanceRequests;
 	private Map<Id, Case> 	oldMaintenanceRequestMap;
@@ -10,6 +10,8 @@ public with sharing class MaintenanceRequestTriggerHandler extends TriggerHandle
 		this.newMaintenanceRequests		= Trigger.new;
 		this.oldMaintenanceRequestMap	= (Map<Id,Case>) Trigger.oldMap;
 		this.newMaintenanceRequestMap	= (Map<Id,Case>) Trigger.newMap;
+
+		this.objectType					= 'Case';
 	}
 
 	public override void afterUpdate() {
