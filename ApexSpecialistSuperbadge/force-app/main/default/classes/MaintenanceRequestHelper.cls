@@ -22,75 +22,144 @@ public with sharing class MaintenanceRequestHelper {
 
     public static void updateWorkOrders(List<Case> newMaintenanceRequests, Map<Id, Case> oldMaintenanceRequestMap) {
         // TODO: Complete the method to update workorders
-        Set<Id>                                         maintenanceRequestIds           = new Set<Id>();
-        List<Case>                                      maintenanceRequestToUpdate      = new List<Case>();
-        List<Product2>                                  listEquipment                   = new List<Product2>();
-        List<Equipment_Maintenance_Item__c>             listEquipmentItem               = new List<Equipment_Maintenance_Item__c>();
-        Map<Id, List<Product2>>                         maintenanceRelatedEquipments    = new Map<Id, List<Product2>>();
-        Map<Id, List<Equipment_Maintenance_Item__c>>    maintenanceAndEquipmentItems    = new Map<Id, List<Equipment_Maintenance_Item__c>>();
+        Set<Id> maintenanceRequestIds       = new Set<Id>();
+        List<Case> casesToInsert            = new List<Case>();
+        Map<Id,Decimal> maintenanceCycles   = new Map<ID,Decimal>();
 
         for(Case maintenance : newMaintenanceRequests) {
-            if(maintenance.Status == CLOSE_STATUS &&
+            if(oldMaintenanceRequestMap.get(maintenance.Id).get(STATUS) != maintenance.Status &&
                     (maintenance.Type == ROUTINE_MAINTENANCE_TYPE 
                     || maintenance.Type == REPAIR_TYPE)
             ) {
-                maintenanceRequestToUpdate.add(maintenance.clone(false, true, false, false));
                 maintenanceRequestIds.add(maintenance.Id);
-                maintenanceRelatedEquipments.put(maintenance.Id, new List<Product2>());
 
                 System.debug('Entra en if 1');
-                System.debug('maintenance current::: ' + maintenance);
-                System.debug('maintenanceRequestToUpdate::: ' + maintenanceRequestToUpdate);
                 System.debug('maintenanceRequestIds::: ' + maintenanceRequestIds);
             }
         }
         
-        List<Id> listIdsEquip = new List<Id>();
+        if(!maintenanceRequestIds.isEmpty()) {
+            Map<Id,Case> closedCasesMap = new Map<Id,Case>([SELECT  Id, 
+                                                                    Vehicle__c, 
+                                                                    ProductId, 
+                                                                    Product.Maintenance_Cycle__c,
+                                                                    (SELECT Id, Equipment__c,Quantity__c 
+                                                                    FROM Equipment_Maintenance_Items__r) 
+                                                            FROM    Case 
+                                                            WHERE   Id IN :maintenanceRequestIds
+                                                            WITH    USER_MODE]);
 
-        for(Case idEquip : [SELECT Product__c 
-                            FROM Case 
-                            WHERE Id IN :maintenanceRequestIds WITH USER_MODE]){
-            listIdsEquip.add(idEquip.Product__c);
-        }
+            AggregateResult[] results = [   SELECT  Maintenance_Request__c, 
+                                                    MIN(Equipment__r.Maintenance_Cycle__c)cycle 
+                                            FROM    Equipment_Maintenance_Item__c 
+                                            WHERE   Maintenance_Request__c IN :maintenanceRequestIds 
+                                            WITH    USER_MODE 
+                                            GROUP BY Maintenance_Request__c];
 
-        System.debug('LIST IDS EQUIPMENT:::' + listIdsEquip);
-
-        listEquipment = [SELECT Id, 
-                                Maintenance_Cycle__c 
-                        FROM    Product2 
-                        WHERE Id IN :listIdsEquip
-                        WITH USER_MODE];
-        
-        System.debug('ListEquipment:: ' + listEquipment);
-
-        List<Integer> days = new List<Integer>();
-        for(Case maintenance : maintenanceRequestToUpdate) {
-            if(maintenance.Type == REPAIR_TYPE) {
-                maintenance.Type = ROUTINE_MAINTENANCE_TYPE;
+            for (AggregateResult result : results) {
+                maintenanceCycles.put((Id) result.get('Maintenance_Request__c'), (Decimal) result.get('cycle'));
             }
-            maintenance.Subject = ROUTINE_MAINTENANCE_TYPE + 'xx';
-            maintenance.Date_Reported__c = System.today();
 
-            for(Product2 equipment : listEquipment) {
-                if(maintenance.Product__c == equipment.Id) {
-                    days.add((Integer)equipment.Maintenance_Cycle__c);
+            for(Case closedCase: closedCasesMap.values()) {
+                Case newCase = new Case(
+                    ParentId            = closedCase.Id,
+                    Status              = 'New',
+                    Subject             = 'Routine Maintenance',
+                    Type                = 'Routine Maintenance',
+                    Vehicle__c          = closedCase.Vehicle__c,
+                    ProductId           = closedCase.ProductId,
+                    Origin              = 'Web',
+                    Date_Reported__c    = Date.today()
+                );
+
+                if(maintenanceCycles.containsKey(closedCase.Id)) {
+                    newCase.Date_Due__c = Date.today().addDays((Integer) maintenanceCycles.get(closedCase.Id));
+                } 
+                // else {
+                //     newCase.Date_Due__c = Date.today().addDays((Integer) closedCase.Product.Maintenance_Cycle__c);
+                // }
+
+                casesToInsert.add(newCase);
+            }
+            
+            System.Database.insert(casesToInsert);
+
+            List<Equipment_Maintenance_Item__c> clonedWPs = new List<Equipment_Maintenance_Item__c>();
+            for(Case nc : casesToInsert){
+                for (Equipment_Maintenance_Item__c wp : closedCasesMap.get(nc.ParentId).Equipment_Maintenance_Items__r){
+                    Equipment_Maintenance_Item__c wpClone = wp.clone();
+                    wpClone.Maintenance_Request__c = nc.Id;
+                    ClonedWPs.add(wpClone);
+                    
                 }
             }
-            System.debug('LIST EQUIPMENT NO SORT:: ' + days);
-            listEquipment.sort();
-            System.debug('LIST EQUIPMENT SORT:: ' + days);
 
-            maintenance.Date_Due__c = System.today().addDays(days.get(0));
-
-
+            insert ClonedWPs;
 
         }
 
-        try{
-            System.Database.insert(maintenanceRequestToUpdate);
-        }
-        catch(Exception e){
-            System.debug('EXCEPTION: ' + e.getMessage());
-        }
-    }        
-}        
+    }
+    
+    // public static void updateW(List<Case> updWorkOrders, Map<Id,Case> nonUpdCaseMap) {
+    //         Set<Id> validIds = new Set<Id>();
+        
+        
+    //     For (Case c : updWorkOrders){
+    //         if (nonUpdCaseMap.get(c.Id).Status != 'Closed' && c.Status == 'Closed'){
+    //             if (c.Type == 'Repair' || c.Type == 'Routine Maintenance'){
+    //                 validIds.add(c.Id);
+                    
+             
+    //             }
+    //         }
+    //     }
+        
+    //     if (!validIds.isEmpty()){
+    //         List<Case> newCases = new List<Case>();
+    //         Map<Id,Case> closedCasesM = new Map<Id,Case>([SELECT Id, Vehicle__c, ProductId, Product2__r.Maintenance_Cycle__c,(SELECT Id,Equipment__c,Quantity__c FROM Equipment_Maintenance_Items__r) 
+    //                                                      FROM Case WHERE Id IN :validIds]);
+    //         Map<Id,Decimal> maintenanceCycles = new Map<ID,Decimal>();
+    //         AggregateResult[] results = [SELECT Maintenance_Request__c, MIN(Equipment__r.Maintenance_Cycle__c)cycle FROM Equipment_Maintenance_Item__c WHERE Maintenance_Request__c IN :ValidIds GROUP BY Maintenance_Request__c];
+        
+    //         for (AggregateResult ar : results){ 
+    //             maintenanceCycles.put((Id) ar.get('Maintenance_Request__c'), (Decimal) ar.get('cycle'));
+    //         }
+            
+    //         for(Case cc : closedCasesM.values()){
+    //             Case nc = new Case (
+    //                 ParentId = cc.Id,
+    //                 Status = 'New',
+    //                 Subject = 'Routine Maintenance',
+    //                 Type = 'Routine Maintenance',
+    //                 Vehicle__c = cc.Vehicle__c,
+    //                 Equipment__c =cc.Equipment__c,
+    //                 Origin = 'Web',
+    //                 Date_Reported__c = Date.Today()
+                    
+    //             );
+                
+    //             If (maintenanceCycles.containskey(cc.Id)){
+    //                 nc.Date_Due__c = Date.today().addDays((Integer) maintenanceCycles.get(cc.Id));
+    //             } else {
+    //                 nc.Date_Due__c = Date.today().addDays((Integer) cc.Equipment__r.maintenance_Cycle__c);
+    //             }
+                
+    //             newCases.add(nc);
+    //         }
+            
+    //        insert newCases;
+            
+    //        List<Equipment_Maintenance_Item__c> clonedWPs = new List<Equipment_Maintenance_Item__c>();
+    //        for (Case nc : newCases){
+    //             for (Equipment_Maintenance_Item__c wp : closedCasesM.get(nc.ParentId).Equipment_Maintenance_Items__r){
+    //                 Equipment_Maintenance_Item__c wpClone = wp.clone();
+    //                 wpClone.Maintenance_Request__c = nc.Id;
+    //                 ClonedWPs.add(wpClone);
+                    
+    //             }
+    //         }
+    //         insert ClonedWPs;
+    //     }
+    // }
+
+}    
